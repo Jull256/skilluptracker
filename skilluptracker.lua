@@ -196,19 +196,28 @@ ashita.events.register('text_in', 'skilluptracker_HandleText', function (e)
             skilluptracker.Settings.skills[skill_id] = {
                 id = skill_id,
                 level = 0,
+                sync = false,
                 short_name = skill_name
             };
         end
-        local old_level = skilluptracker.Settings.skills[skill_id]['level']
-        local new_level = tonumber(old_level) + (tonumber(increase) / 10)
+        local old_level = skilluptracker.Settings.skills[skill_id]['level'];
+        local new_level = old_level + increase;
 
         update_skill(skill_id, new_level);
 
         if (skills[tonumber(skill_id)]['category'] == 'Synthesis') then
-            e.message_modified = ("%s (%0.1f)"):format(e.message_modified, new_level);
+            if (skilluptracker.Settings.skills[skill_id]['sync']) then
+                e.message_modified = ("%s (%0.1f)"):format(e.message_modified, new_level / 10);
+            else
+                e.message_modified = ("%s (?.%d)"):format(e.message_modified, new_level % 10);
+            end
         else
             local max = get_max_level(tonumber(skill_id))
-            e.message_modified = ("%s (%0.1f/%d)"):format(e.message_modified, new_level, max)
+            if (skilluptracker.Settings.skills[skill_id]['sync']) then
+                e.message_modified = ("%s (%0.1f/%d)"):format(e.message_modified, new_level / 10, max)
+            else
+                e.message_modified = ("%s (?.%d/%d)"):format(e.message_modified, new_level % 10, max);
+            end
         end
     end
 
@@ -225,19 +234,21 @@ ashita.events.register('text_in', 'skilluptracker_HandleText', function (e)
         end
 
         local old_level = skilluptracker.Settings.skills[skill_id]['level']
-        local new_level = tonumber(level_str)
+        local new_level = tonumber(level_str) * 10
 
         -- in sync
-        if ((old_level + 0.01):floor() == new_level:floor()) then
+        if (math.floor(old_level / 10) == math.floor(new_level / 10)) then
             if (skills[tonumber(skill_id)]['category'] == 'Synthesis') then
-                e.message_modified = ("%s (%0.1f)"):format(e.message_modified, old_level);
+                e.message_modified = ("%s (%0.1f)"):format(e.message_modified, old_level / 10);
+                return;
             else
                 local max = get_max_level (tonumber(skill_id))
-                e.message_modified = ("%s (%0.1f/%d)"):format(e.message_modified, old_level, max)
+                e.message_modified = ("%s (%0.1f/%d)"):format(e.message_modified, old_level / 10, max)
+                return;
             end
         end
-        
         -- out of sync
+        skilluptracker.Settings.skills[skill_id]['sync'] = true;
         update_skill(skill_id, new_level)
     end
 end);
