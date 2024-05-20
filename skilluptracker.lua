@@ -179,9 +179,8 @@ local function get_skill_id(skill_name)
 end
 
 ashita.events.register('text_in', 'skilluptracker_HandleText', function (e)
-    if (e.injected == true) then return; end
     if (e.blocked) then return; end
-    
+
     local line = e.message:strip_colors()
     if (line:match('skill rises')) then
         local _,_, player_name, skill_name, increase  = line:find("(%a+)'s (.+) skill rises 0.(%d+)")
