@@ -211,4 +211,33 @@ ashita.events.register('text_in', 'skilluptracker_HandleText', function (e)
             e.message_modified = ("%s (%0.1f/%d)"):format(e.message_modified, new_level, max)
         end
     end
+
+    -- new skill level 
+    -- example: "Name's healing magic skill reaches level 167"
+    if (line:match('skill reaches')) then
+        local _,_, player_name, skill_name, level_str  = line:find("(%a+)'s (.+) skill reaches level (%d+)")
+        local skill_id = get_skill_id(skill_name:capitalize())
+
+        -- Unable to find skill_id
+        if (not skill_id) then
+            print(chat.header(addon.name) .. chat.warning('Unknown skill : '..skill_name));
+            return;
+        end
+
+        local old_level = skilluptracker.Settings.skills[skill_id]['level']
+        local new_level = tonumber(level_str)
+
+        -- in sync
+        if ((old_level + 0.01):floor() == new_level:floor()) then
+            if (skills[tonumber(skill_id)]['category'] == 'Synthesis') then
+                e.message_modified = ("%s (%0.1f)"):format(e.message_modified, old_level);
+            else
+                local max = get_max_level (tonumber(skill_id))
+                e.message_modified = ("%s (%0.1f/%d)"):format(e.message_modified, old_level, max)
+            end
+        end
+        
+        -- out of sync
+        update_skill(skill_id, new_level)
+    end
 end);
