@@ -152,16 +152,6 @@ settings.register('settings', 'settings_update', function (s)
     settings.save();
 end);
 
-ashita.events.register('packet_in', 'skilluptracker_HandleIncomingPacket', function (e)
-    -- Player character update packet, see if that's enough
-    if (e.id == 0x001B) then
-        skilluptracker.mainJob = skilluptracker.Player:GetMainJob();
-        skilluptracker.jobLevel = skilluptracker.Player:GetMainJobLevel();
-        skilluptracker.subJob = skilluptracker.Player:GetSubJob();
-        skilluptracker.subJobLevel = skilluptracker.Player:GetSubJobLevel();
-    end
-end);
-
 -- Update level for skill_id.
 local function update_skill(skill_id, level)
     if (skilluptracker.Settings.skills[skill_id] and skilluptracker.Settings.skills[skill_id]['level']) then
