@@ -46,4 +46,5 @@ return T{
     [55] = {id=55,en="Alchemy",ja="錬金術",category="Synthesis"},
     [56] = {id=56,en="Cooking",ja="調理",category="Synthesis"},
     [57] = {id=57,en="Synergy",ja="錬成",category="Synthesis"},
+    [58] = {id=57,en="Digging",ja="掘る",category="Synthesis"},
 };
