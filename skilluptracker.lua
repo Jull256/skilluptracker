@@ -2,7 +2,7 @@ addon.name      = 'skilluptracker';
 addon.author    = 'Jull - Original by Mujihina';
 addon.version   = '1.00';
 addon.desc      = 'Displays current decimal and cap in skillup messages.';
-addon.link      = 'https://github.com/Jhuul/skilluptracker/';
+addon.link      = 'https://github.com/Jull256/skilluptracker/';
 
 require('common');
 local settings = require('settings');
