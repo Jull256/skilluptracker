@@ -1,25 +1,51 @@
 addon.name      = 'skilluptracker';
 addon.author    = 'Jull - Original by Mujihina';
-addon.version   = '1.01';
+addon.version   = '1.02';
 addon.desc      = 'Displays current decimal and cap in skillup messages.';
 addon.link      = 'https://github.com/Jull256/skilluptracker/';
 
 require('common');
+local ffi = require('ffi');
 local settings = require('settings');
 local chat = require('chat');
 local grades = require('job_grades')
 local skills = require('skills');
 
 local defaults = T{
-    skills = T{};
-    skillup_colors = { 213, 210, 167 };
-    cap_color = 220;
+    skill_levels = {};
+    colors = {
+        skillups = { 106, 6, 5 };
+        cap = 4;
+        msg = 106;
+        skillname = 1;
+        nickname = 1;
+    }
 }
 
 local skilluptracker = {
     Settings = settings.load(defaults),
     Player = AshitaCore:GetMemoryManager():GetPlayer();
 };
+
+-- FFI Prototypes
+ffi.cdef[[
+    // Packet: 0x0029 - Battle Message (Server To Client)
+    typedef struct packet_battlemsg_s2c_t
+    {
+        uint16_t    id: 9;
+        uint16_t    size: 7;
+        uint16_t    sync;
+        uint32_t    UniqueNoCas;    // PS2: UniqueNoCas
+        uint32_t    UniqueNoTar;    // PS2: UniqueNoTar
+        uint32_t    Data;           // PS2: data
+        uint32_t    Data2;          // PS2: data2
+        uint16_t    ActIndexCas;    // PS2: ActIndexCas
+        uint16_t    ActIndexTar;    // PS2: ActIndexTar
+        uint16_t    MessageNum;     // PS2: MessageNum
+        uint8_t     Type;           // PS2: Type
+        uint8_t     padding00;      // PS2: padding00
+    } packet_battlemsg_s2c_t;
+]];
 
 -- Calculate max skill level based on grade and job level
 local function calculate_max(level, grade)
@@ -131,21 +157,23 @@ end
 
 -- Get max skill level of skill with skill id = i
 local function get_max_level(i)
+    local Player = AshitaCore:GetMemoryManager():GetPlayer();
+
     -- Don't look up grades or max skillcap for crafting skills
     if (skills[tonumber(i)]['category'] == 'Synthesis') then return 0; end
 
     -- Should never happen but still a potential crash prevention
     if (grades[i] == nil) then return 0; end
 
-    local main_grade = grades[i][skilluptracker.Player:GetMainJob()];
-    local main_max = calculate_max(skilluptracker.Player:GetMainJobLevel(), main_grade);
+    local mainJobGrade = grades[i][Player:GetMainJob()];
+    local mainJobMax = calculate_max(Player:GetMainJobLevel(), mainJobGrade);
 
-    if (skilluptracker.subJob) then
-        local sub_grade = grades[i][skilluptracker.Player:GetSubJob()];
-        local sub_max = calculate_max(skilluptracker.Player:GetSubJobLevel(), sub_grade);
-        return math.max(main_max, sub_max);
+    local subJobGrade = grades[i][Player:GetSubJob()];
+    if (subJobGrade) then
+        local subJobMax = calculate_max(Player:GetSubJobLevel(), subJobGrade);
+        return math.max(mainJobMax, subJobMax);
     else
-        return main_max;
+        return mainJobMax;
     end
 end
 
@@ -157,124 +185,106 @@ settings.register('settings', 'settings_update', function (s)
     settings.save();
 end);
 
--- get short name of skill, and return skill id.
-local function get_skill_id(skill_name)
-    --Fix for Hand-to-hand
-    if (skill_name == "Hand To Hand" or skill_name == "Hand-to-hand") then skill_name = "Hand-to-Hand" end
-    --Fix for Leathercraft/Leatherworking
-    if (skill_name == "Leatherworking") then skill_name = "Leathercraft" end
-    
-    local _,skill = skills:find_if(function(s) 
-        return s.en == skill_name or s.ja == skill_name;
-    end);
-    if (skill) then
-        return skill.id;
+local function printError(errorMsg)
+    print(chat.header(addon.name):append(chat.error(errorMsg)));
+end
+
+local function getSkillObject(skill_id)
+    local Player = AshitaCore:GetMemoryManager():GetPlayer();
+    local Skill;
+
+    if (skill_id >= 48) then
+        Skill = Player:GetCraftSkill(skill_id - 48);
     else
-        print(chat.header(addon.name) .. chat.warning(('Unable to find skill id for %s'):format(skill_name)));
-        return 0;
+        Skill = Player:GetCombatSkill(skill_id);
     end
+
+    if (not Skill) then
+        printError("Couldn't load skill with ID "..skill_id);
+        return nil;
+    end
+
+    return Skill;
 end
 
-local function cond_color(bool, color, str)
-    return bool and chat.color2(color, str) or chat.message(str);
-end
-
--- Returns the ashita skill object and the maxlevel
-local function getSkillData(skill_id)
-    local PSkill;
-    local maxLevel = 0;
-    if (skills[skill_id]['category'] == 'Synthesis') then
-        PSkill = skilluptracker.Player:GetCraftSkill(skill_id - 48);
-        maxLevel = (PSkill:GetRank() + 1) * 10;
+local function getSkillCap(pSkill, skillID)
+    if (skillID >= 48) then
+        return (PSkill:GetRank() + 1) * 10;
     else
-        PSkill = skilluptracker.Player:GetCombatSkill(skill_id);
-        maxLevel = get_max_level(skill_id);
+        return get_max_level(skill_id);
     end
-
-    return PSkill, maxLevel;
 end
 
-ashita.events.register('text_in', 'skilluptracker_HandleText', function (e)
-    if (e.blocked) then return; end
+local function getSkillUpColor(amount)
+    return skilluptracker.Settings.colors.skillups[math.min(amount, #skilluptracker.Settings.colors.skillups)]
+end
 
-    -- Regular skillup
-    -- Example: "Name's healing magic skill rises 0.1"
-    if (e.message:match(' skill rises 0.')) then
-        local line = AshitaCore:GetChatManager():ParseAutoTranslate(e.message_modified, false);
-        local _,_, strbegin, player_name, skill_name, increase = line:find("(.+) %A+(%a+)%A+'s%A+([%s%a]+)%A+ skill rises 0.(%d+)");
-        if (skill_name == nil) then return; end
-        local skill_id = get_skill_id(skill_name:capitalize());
+--[[
+* event: packet_in
+* desc : Event called when the addon is processing incoming packets.
+--]]
+ashita.events.register('packet_in', 'skilluptracker_PacketIn', function (e)
+    -- Packet: Battle Message
+    if (e.id == 0x29) then
+        local packet = ffi.cast('packet_battlemsg_s2c_t*', e.data_modified_raw);
 
-        -- Unable to find skill_id
-        if (not skill_id) then
-            print(chat.header(addon.name) .. chat.warning('Unknown skill : '..skill_name));
-            return;
-        end
-    
-        local PSkill, maxLevel = getSkillData(skill_id);
+        -- Decimal skillup
+        if (packet.MessageNum == 38) then
+            local skillID = packet.Data;
+            local skillAmount = packet.Data2;
+            local savedLevel = skilluptracker.Settings.skill_levels[skillID];
+            local pSkill = getSkillObject(skill_id);
+            local sSkill = skills[skill_id];
+            if (not pSkill or not sSkill) then return; end
+            local skillCap = getSkillCap(pSkill, skillID);
 
-        -- Init the skill settings if necessary
-        if (skilluptracker.Settings.skills[skill_id] == nil) then
-            skilluptracker.Settings.skills[skill_id] = T{
-                id = skill_id,
-                level = PSkill:GetSkill() * 10,
-            };
-        end
-
-        -- Increase the skill by the message amount
-        local settingsSkill = skilluptracker.Settings.skills[skill_id];
-        settingsSkill.level = settingsSkill.level + increase;
-        settings.save();
-
-        -- Modify the log message
-        local str = (" (%0.1f/%d)"):format(settingsSkill.level / 10, maxLevel);
-        e.message_modified = (strbegin..' ')
-            :append(chat.color2(1, player_name))
-            :append(chat.message('\'s '))
-            :append(chat.color2(213, skill_name))
-            :append(chat.message(' skill rises '))
-            :append(chat.color2(skilluptracker.Settings.skillup_colors[math.min(increase, #skilluptracker.Settings.skillup_colors)], '0.'..tostring(increase)))
-            :append(cond_color(PSkill:IsCapped(), skilluptracker.Settings.cap_color, str))
-    end
-
-    -- New skill level
-    -- Example: "Name's healing magic skill reaches level 167"
-    if (e.message:match(' skill reaches level ')) then
-        local line = AshitaCore:GetChatManager():ParseAutoTranslate(e.message_modified, false);
-        local _,_, strbegin, player_name, skill_name, level_str = line:find("(.+) %A+(%a+)%A+'s%A+([%s%a]+)%A+ skill reaches level (%d+)");
-        if (skill_name == nil) then return; end
-        local skill_id = get_skill_id(skill_name:capitalize());
-
-        -- Unable to find skill_id
-        if (not skill_id) then
-            print(chat.header(addon.name) .. chat.warning('Unknown skill : '..skill_name));
-            return;
-        end
-
-        local PSkill, maxLevel = getSkillData(skill_id);
-
-        -- Init the skill settings if necessary
-        if (skilluptracker.Settings.skills[skill_id] == nil) then
-            skilluptracker.Settings.skills[skill_id] = T{
-                id = skill_id,
-                level = PSkill:GetSkill() * 10,
-            };
-        end
-
-        -- Resync if we're lagging behind
-        local newLevel = tonumber(level_str) * 10;
-        if (skilluptracker.Settings.skills[skill_id] < newLevel) then
-            skilluptracker.Settings.skills[skill_id].level = newLevel;
+            -- Add the amount to the settings
+            savedLevel = savedLevel + skillAmount;
             settings.save();
-        end
 
-        -- Modify the log message
-        e.message_modified = (strbegin..' ')
-            :append(chat.color2(1, player_name))
-            :append(chat.message('\'s '))
-            :append(chat.color2(213, skill_name))
-            :append(chat.message(' skill reaches level '))
-            :append(cond_color(PSkill:IsCapped(), skilluptracker.Settings.cap_color, level_str))
-            :append(chat.color2(skilluptracker.Settings.cap_color, '/'..maxLevel));
+            -- Send the skillup message to the log
+            local colors = skilluptracker.Settings.colors;
+            AshitaCore:GetChatManager():AddChatMessage(colors.msg, false
+                ("Your ")
+                :append(chat.color1(colors.skillname, sSkill['en']))
+                :append(' skill rises ')
+                :append(chat.color1(getSkillUpColor(skillAmount), ('0.%d'):fmt(skillAmount)))
+                :append('(')
+                :append(chat.color1(pSkill:IsCapped() and colors.cap or colors.msg, ("%0.1f"):fmt(savedLevel / 10)))
+                :append(chat.color1(colors.cap, ("/%d"):fmt(skillCap)))
+                :append(')')
+            );
+
+            -- Prevent the client from sending another message
+            e.blocked = true;
+
+        -- Full skillup
+        elseif (packet.MessageNum == 53) then
+            local skillID = packet.Data;
+            local skillLevel = packet.Data2;
+            local savedLevel = skilluptracker.Settings.skill_levels[skillID];
+            local pSkill = getSkillObject(skill_id);
+            local sSkill = skills[skill_id];
+            if (not pSkill or not sSkill) then return; end
+            local skillCap = getSkillCap(pSkill, skillID);
+
+            -- Update the saved value if we're not sync'd
+            if (math.floor(savedLevel / 10) != skillLevel) then
+                savedLevel = skillLevel * 10;
+            end
+
+            -- Send the skillup message to the log
+            local colors = skilluptracker.Settings.colors;
+            AshitaCore:GetChatManager():AddChatMessage(colors.msg, false
+                ("Your ")
+                :append(chat.color1(colors.skillname, sSkill['en']))
+                :append(' skill reaches level ')
+                :append(chat.color1(pSkill:IsCapped() and colors.cap or colors.msg, ('0.%d'):fmt(skillLevel)))
+                :append(chat.color1(colors.cap, ("/%d"):fmt(skillCap)))
+            );
+
+            -- Prevent the client from sending another message
+            e.blocked = true;
+        end
     end
-end);
+end
