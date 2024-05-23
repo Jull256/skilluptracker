@@ -1,6 +1,6 @@
 addon.name      = 'skilluptracker';
 addon.author    = 'Jull - Original by Mujihina';
-addon.version   = '1.00';
+addon.version   = '1.01';
 addon.desc      = 'Displays current decimal and cap in skillup messages.';
 addon.link      = 'https://github.com/Jull256/skilluptracker/';
 
@@ -12,6 +12,8 @@ local skills = require('skills');
 
 local defaults = T{
     skills = T{};
+    skillup_colors = { 213, 210, 167 };
+    cap_color = 220;
 }
 
 local skilluptracker = {
@@ -132,6 +134,9 @@ local function get_max_level(i)
     -- Don't look up grades or max skillcap for crafting skills
     if (skills[tonumber(i)]['category'] == 'Synthesis') then return 0; end
 
+    -- Should never happen but still a potential crash prevention
+    if (grades[i] == nil) then return 0; end
+
     local main_grade = grades[i][skilluptracker.Player:GetMainJob()];
     local main_max = calculate_max(skilluptracker.Player:GetMainJobLevel(), main_grade);
 
@@ -152,14 +157,6 @@ settings.register('settings', 'settings_update', function (s)
     settings.save();
 end);
 
--- Update level for skill_id.
-local function update_skill(skill_id, level)
-    if (skilluptracker.Settings.skills[skill_id] and skilluptracker.Settings.skills[skill_id]['level']) then
-        skilluptracker.Settings.skills[skill_id]['level'] = level;
-        settings.save();
-    end    
-end
-
 -- get short name of skill, and return skill id.
 local function get_skill_id(skill_name)
     --Fix for Hand-to-hand
@@ -171,61 +168,82 @@ local function get_skill_id(skill_name)
         return s.en == skill_name or s.ja == skill_name;
     end);
     if (skill) then
-        return tostring(skill.id);
+        return skill.id;
     else
         print(chat.header(addon.name) .. chat.warning(('Unable to find skill id for %s'):format(skill_name)));
-        return "0"
+        return 0;
     end
+end
+
+local function cond_color(bool, color, str)
+    return bool and chat.color2(color, str) or chat.message(str);
+end
+
+-- Returns the ashita skill object and the maxlevel
+local function getSkillData(skill_id)
+    local PSkill;
+    local maxLevel = 0;
+    if (skills[skill_id]['category'] == 'Synthesis') then
+        PSkill = skilluptracker.Player:GetCraftSkill(skill_id - 48);
+        maxLevel = (PSkill:GetRank() + 1) * 10;
+    else
+        PSkill = skilluptracker.Player:GetCombatSkill(skill_id);
+        maxLevel = get_max_level(skill_id);
+    end
+
+    return PSkill, maxLevel;
 end
 
 ashita.events.register('text_in', 'skilluptracker_HandleText', function (e)
     if (e.blocked) then return; end
 
-    local line = e.message:strip_colors()
-    if (line:match('skill rises')) then
-        local _,_, player_name, skill_name, increase  = line:find("(%a+)'s (.+) skill rises 0.(%d+)")
-        local skill_id = get_skill_id(skill_name:capitalize())
+    -- Regular skillup
+    -- Example: "Name's healing magic skill rises 0.1"
+    if (e.message:match(' skill rises 0.')) then
+        local line = AshitaCore:GetChatManager():ParseAutoTranslate(e.message_modified, false);
+        local _,_, strbegin, player_name, skill_name, increase = line:find("(.+) %A+(%a+)%A+'s%A+([%s%a]+)%A+ skill rises 0.(%d+)");
+        if (skill_name == nil) then return; end
+        local skill_id = get_skill_id(skill_name:capitalize());
 
         -- Unable to find skill_id
         if (not skill_id) then
             print(chat.header(addon.name) .. chat.warning('Unknown skill : '..skill_name));
             return;
         end
+    
+        local PSkill, maxLevel = getSkillData(skill_id);
 
+        -- Init the skill settings if necessary
         if (skilluptracker.Settings.skills[skill_id] == nil) then
-            skilluptracker.Settings.skills[skill_id] = {
+            skilluptracker.Settings.skills[skill_id] = T{
                 id = skill_id,
-                level = 0,
-                sync = false,
-                short_name = skill_name
+                level = PSkill:GetSkill() * 10,
             };
         end
-        local old_level = skilluptracker.Settings.skills[skill_id]['level'];
-        local new_level = old_level + increase;
 
-        update_skill(skill_id, new_level);
+        -- Increase the skill by the message amount
+        local settingsSkill = skilluptracker.Settings.skills[skill_id];
+        settingsSkill.level = settingsSkill.level + increase;
+        settings.save();
 
-        if (skills[tonumber(skill_id)]['category'] == 'Synthesis') then
-            if (skilluptracker.Settings.skills[skill_id]['sync']) then
-                e.message_modified = ("%s (%0.1f)"):format(e.message_modified, new_level / 10);
-            else
-                e.message_modified = ("%s (?.%d)"):format(e.message_modified, new_level % 10);
-            end
-        else
-            local max = get_max_level(tonumber(skill_id))
-            if (skilluptracker.Settings.skills[skill_id]['sync']) then
-                e.message_modified = ("%s (%0.1f/%d)"):format(e.message_modified, new_level / 10, max)
-            else
-                e.message_modified = ("%s (?.%d/%d)"):format(e.message_modified, new_level % 10, max);
-            end
-        end
+        -- Modify the log message
+        local str = (" (%0.1f/%d)"):format(settingsSkill.level / 10, maxLevel);
+        e.message_modified = (strbegin..' ')
+            :append(chat.color2(1, player_name))
+            :append(chat.message('\'s '))
+            :append(chat.color2(213, skill_name))
+            :append(chat.message(' skill rises '))
+            :append(chat.color2(skilluptracker.Settings.skillup_colors[math.min(increase, #skilluptracker.Settings.skillup_colors)], '0.'..tostring(increase)))
+            :append(cond_color(PSkill:IsCapped(), skilluptracker.Settings.cap_color, str))
     end
 
-    -- new skill level 
-    -- example: "Name's healing magic skill reaches level 167"
-    if (line:match('skill reaches')) then
-        local _,_, player_name, skill_name, level_str  = line:find("(%a+)'s (.+) skill reaches level (%d+)")
-        local skill_id = get_skill_id(skill_name:capitalize())
+    -- New skill level
+    -- Example: "Name's healing magic skill reaches level 167"
+    if (e.message:match(' skill reaches level ')) then
+        local line = AshitaCore:GetChatManager():ParseAutoTranslate(e.message_modified, false);
+        local _,_, strbegin, player_name, skill_name, level_str = line:find("(.+) %A+(%a+)%A+'s%A+([%s%a]+)%A+ skill reaches level (%d+)");
+        if (skill_name == nil) then return; end
+        local skill_id = get_skill_id(skill_name:capitalize());
 
         -- Unable to find skill_id
         if (not skill_id) then
@@ -233,22 +251,30 @@ ashita.events.register('text_in', 'skilluptracker_HandleText', function (e)
             return;
         end
 
-        local old_level = skilluptracker.Settings.skills[skill_id]['level']
-        local new_level = tonumber(level_str) * 10
+        local PSkill, maxLevel = getSkillData(skill_id);
 
-        -- in sync
-        if (math.floor(old_level / 10) == math.floor(new_level / 10)) then
-            if (skills[tonumber(skill_id)]['category'] == 'Synthesis') then
-                e.message_modified = ("%s (%0.1f)"):format(e.message_modified, old_level / 10);
-                return;
-            else
-                local max = get_max_level (tonumber(skill_id))
-                e.message_modified = ("%s (%0.1f/%d)"):format(e.message_modified, old_level / 10, max)
-                return;
-            end
+        -- Init the skill settings if necessary
+        if (skilluptracker.Settings.skills[skill_id] == nil) then
+            skilluptracker.Settings.skills[skill_id] = T{
+                id = skill_id,
+                level = PSkill:GetSkill() * 10,
+            };
         end
-        -- out of sync
-        skilluptracker.Settings.skills[skill_id]['sync'] = true;
-        update_skill(skill_id, new_level)
+
+        -- Resync if we're lagging behind
+        local newLevel = tonumber(level_str) * 10;
+        if (skilluptracker.Settings.skills[skill_id] < newLevel) then
+            skilluptracker.Settings.skills[skill_id].level = newLevel;
+            settings.save();
+        end
+
+        -- Modify the log message
+        e.message_modified = (strbegin..' ')
+            :append(chat.color2(1, player_name))
+            :append(chat.message('\'s '))
+            :append(chat.color2(213, skill_name))
+            :append(chat.message(' skill reaches level '))
+            :append(cond_color(PSkill:IsCapped(), skilluptracker.Settings.cap_color, level_str))
+            :append(chat.color2(skilluptracker.Settings.cap_color, '/'..maxLevel));
     end
 end);
