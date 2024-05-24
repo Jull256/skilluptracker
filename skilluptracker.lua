@@ -1,5 +1,5 @@
 addon.name      = 'skilluptracker';
-addon.author    = 'Jull - Original by Mujihina';
+addon.author    = 'Jull (Original idea by Mujihina)';
 addon.version   = '1.02';
 addon.desc      = 'Displays current decimal and cap in skillup messages.';
 addon.link      = 'https://github.com/Jull256/skilluptracker/';
@@ -9,22 +9,26 @@ local ffi = require('ffi');
 local settings = require('settings');
 local chat = require('chat');
 local grades = require('job_grades')
+local imgui = require('imgui');
 local skills = require('skills');
 
 local defaults = T{
     skill_levels = {};
     colors = {
-        skillups = { 106, 6, 5 };
-        cap = 4;
-        msg = 106;
-        skillname = 1;
-        nickname = 1;
+        skillups = { 106, 2, 6 };
+        cap = 8; -- 4 for blue
+        uncap = 106;
+        msg = 129;
+        skillname = 106;
+        nickname = 106;
     }
 }
 
 local skilluptracker = {
+    Visible = {false},
     Settings = settings.load(defaults),
-    Player = AshitaCore:GetMemoryManager():GetPlayer();
+    Player = AshitaCore:GetMemoryManager():GetPlayer(),
+    MsgMode = 128, -- Can't be 129 because we filter these (simplelog conflict fix)
 };
 
 -- FFI Prototypes
@@ -151,7 +155,7 @@ local function calculate_max(level, grade)
         if (level < 91) then return level*2 + 21 end
         return level*3 - 69
     end
-    print(chat.header(addon.name) .. chat.warning(('Unrecognized grade: %s'):format(grade)));
+    printError(('Unrecognized grade: %s'):format(grade));
     return 0
 end
 
@@ -189,18 +193,18 @@ local function printError(errorMsg)
     print(chat.header(addon.name):append(chat.error(errorMsg)));
 end
 
-local function getSkillObject(skill_id)
+local function getSkillObject(skillID)
     local Player = AshitaCore:GetMemoryManager():GetPlayer();
     local Skill;
 
-    if (skill_id >= 48) then
-        Skill = Player:GetCraftSkill(skill_id - 48);
+    if (skillID >= 48) then
+        Skill = Player:GetCraftSkill(skillID - 48);
     else
-        Skill = Player:GetCombatSkill(skill_id);
+        Skill = Player:GetCombatSkill(skillID);
     end
 
     if (not Skill) then
-        printError("Couldn't load skill with ID "..skill_id);
+        printError("Couldn't load skill with ID "..skillID);
         return nil;
     end
 
@@ -209,14 +213,39 @@ end
 
 local function getSkillCap(pSkill, skillID)
     if (skillID >= 48) then
-        return (PSkill:GetRank() + 1) * 10;
+        return (pSkill:GetRank() + 1) * 10;
     else
-        return get_max_level(skill_id);
+        return get_max_level(skillID);
     end
 end
 
 local function getSkillUpColor(amount)
     return skilluptracker.Settings.colors.skillups[math.min(amount, #skilluptracker.Settings.colors.skillups)]
+end
+
+local function sendDecimalSkillupMessage(skillname, skillAmount, total, capped, cap)
+    local colors = skilluptracker.Settings.colors;
+    AshitaCore:GetChatManager():AddChatMessage(skilluptracker.MsgMode, false,
+        chat.color1(colors.msg, 'Your ')
+        :append(chat.color1(colors.skillname, skillname))
+        :append(chat.color1(colors.msg, ' skill rises '))
+        :append(chat.color1(getSkillUpColor(skillAmount), ('0.%d'):fmt(skillAmount)))
+        :append(chat.color1(colors.msg, ' points ('))
+        :append(chat.color1(capped and colors.cap or colors.uncap, ("%0.1f"):fmt(total / 10)))
+        :append(chat.color1(capped and colors.cap or colors.uncap, (" / %d"):fmt(cap)))
+        :append(chat.color1(colors.msg, ')'))
+    );
+end
+
+local function sendFullSkillupMessage(skillname, skillLevel, capped, cap)
+    local colors = skilluptracker.Settings.colors;
+    AshitaCore:GetChatManager():AddChatMessage(skilluptracker.MsgMode, false,
+        chat.color1(colors.msg, 'Your ')
+        :append(chat.color1(colors.skillname, skillname))
+        :append(chat.color1(colors.msg, ' skill reaches level '))
+        :append(chat.color1(capped and colors.cap or colors.uncap, ('%d'):fmt(skillLevel / 10)))
+        :append(chat.color1(capped and colors.cap or colors.uncap, (" / %d"):fmt(cap)))
+    );
 end
 
 --[[
@@ -232,28 +261,21 @@ ashita.events.register('packet_in', 'skilluptracker_PacketIn', function (e)
         if (packet.MessageNum == 38) then
             local skillID = packet.Data;
             local skillAmount = packet.Data2;
-            local savedLevel = skilluptracker.Settings.skill_levels[skillID];
-            local pSkill = getSkillObject(skill_id);
-            local sSkill = skills[skill_id];
+            local pSkill = getSkillObject(skillID);
+            local sSkill = skills[skillID];
+            local savedLevel = skilluptracker.Settings.skill_levels[skillID] or pSkill:GetSkill() * 10;
             if (not pSkill or not sSkill) then return; end
             local skillCap = getSkillCap(pSkill, skillID);
 
-            -- Add the amount to the settings
+            -- Increment
             savedLevel = savedLevel + skillAmount;
+
+            -- Update the saved value
+            skilluptracker.Settings.skill_levels[skillID] = savedLevel;
             settings.save();
 
             -- Send the skillup message to the log
-            local colors = skilluptracker.Settings.colors;
-            AshitaCore:GetChatManager():AddChatMessage(colors.msg, false
-                ("Your ")
-                :append(chat.color1(colors.skillname, sSkill['en']))
-                :append(' skill rises ')
-                :append(chat.color1(getSkillUpColor(skillAmount), ('0.%d'):fmt(skillAmount)))
-                :append('(')
-                :append(chat.color1(pSkill:IsCapped() and colors.cap or colors.msg, ("%0.1f"):fmt(savedLevel / 10)))
-                :append(chat.color1(colors.cap, ("/%d"):fmt(skillCap)))
-                :append(')')
-            );
+            sendDecimalSkillupMessage(sSkill['en']:lower(), skillAmount, savedLevel, pSkill:IsCapped(), skillCap);
 
             -- Prevent the client from sending another message
             e.blocked = true;
@@ -262,29 +284,111 @@ ashita.events.register('packet_in', 'skilluptracker_PacketIn', function (e)
         elseif (packet.MessageNum == 53) then
             local skillID = packet.Data;
             local skillLevel = packet.Data2;
-            local savedLevel = skilluptracker.Settings.skill_levels[skillID];
-            local pSkill = getSkillObject(skill_id);
-            local sSkill = skills[skill_id];
+            local savedLevel = skilluptracker.Settings.skill_levels[skillID] or 0;
+            local pSkill = getSkillObject(skillID);
+            local sSkill = skills[skillID];
             if (not pSkill or not sSkill) then return; end
             local skillCap = getSkillCap(pSkill, skillID);
 
             -- Update the saved value if we're not sync'd
-            if (math.floor(savedLevel / 10) != skillLevel) then
-                savedLevel = skillLevel * 10;
+            if (math.floor(savedLevel / 10) ~= skillLevel) then
+                skilluptracker.Settings.skill_levels[skillID] = skillLevel * 10;
             end
 
             -- Send the skillup message to the log
-            local colors = skilluptracker.Settings.colors;
-            AshitaCore:GetChatManager():AddChatMessage(colors.msg, false
-                ("Your ")
-                :append(chat.color1(colors.skillname, sSkill['en']))
-                :append(' skill reaches level ')
-                :append(chat.color1(pSkill:IsCapped() and colors.cap or colors.msg, ('0.%d'):fmt(skillLevel)))
-                :append(chat.color1(colors.cap, ("/%d"):fmt(skillCap)))
-            );
+            sendFullSkillupMessage(sSkill['en']:lower(), skillLevel * 10, pSkill:IsCapped(), skillCap);
 
             -- Prevent the client from sending another message
             e.blocked = true;
         end
     end
-end
+end);
+
+--[[
+* event: packet_in
+* desc : Event called when the addon is processing incoming texts.
+--]]
+ashita.events.register('text_in', 'skilluptracker_HandleText', function (e)
+    if (e.blocked) then return; end
+
+    -- Block simplelog's default skillup messages (conflict fix)
+    if (e.mode ~= 129) then return; end
+    local line = e.message:strip_colors()
+    if (line:match(' skill rises ') or line:match(' skill reaches ')) then
+        e.blocked = true;
+    end
+end);
+
+--[[
+* event: d3d_present
+* desc : Event called when the Direct3D device is presenting a scene.
+--]]
+ashita.events.register('d3d_present', 'skilluptracker_HandleRender', function ()
+    if (not skilluptracker.Visible[1]) then return; end
+    
+    -- Draw config window
+    imgui.SetNextWindowSize({ 300, nil, });
+    if imgui.Begin("SkillUpTracker Config", skilluptracker.Visible, ImGuiWindowFlags_NoResize) then
+        imgui.TextColored({ 1.0, 1.0, 0.0, 1.0, }, ('Colors'):fmt(i));
+        imgui.PushItemWidth(30);
+        local msgColor = {skilluptracker.Settings.colors.msg};
+        if (imgui.InputInt(' Message', msgColor, 0)) then
+            skilluptracker.Settings.colors.msg = msgColor[1];
+            settings.save();
+        end
+        local highlight = {skilluptracker.Settings.colors.skillname};
+        if (imgui.InputInt(' Highlight', highlight, 0)) then
+            skilluptracker.Settings.colors.skillups[1] = highlight[1];
+            skilluptracker.Settings.colors.uncap = highlight[1];
+            skilluptracker.Settings.colors.skillname = highlight[1];
+            skilluptracker.Settings.colors.nickname = highlight[1];
+            settings.save();
+        end
+        local skillup2 = {skilluptracker.Settings.colors.skillups[2]};
+        if (imgui.InputInt(' 0.2 skillups', skillup2, 0)) then
+            skilluptracker.Settings.colors.skillups[2] = skillup2[1];
+            settings.save();
+        end
+        local skillup3 = {skilluptracker.Settings.colors.skillups[3]};
+        if (imgui.InputInt(' >0.2 skillups', skillup3, 0)) then
+            skilluptracker.Settings.colors.skillups[3] = skillup3[1];
+            settings.save();
+        end
+        imgui.PopItemWidth()
+        imgui.Separator();
+        if (imgui.Button('Color Test')) then
+            sendFullSkillupMessage('testing', 95, false, 10);
+            sendDecimalSkillupMessage('testing', 1, 95, false, 10);
+            sendDecimalSkillupMessage('testing', 2, 97, false, 10);
+            sendDecimalSkillupMessage('testing', 3, 100, true, 10);
+            sendFullSkillupMessage('testing', 100, true, 10);
+        end
+        imgui.SameLine();
+        if (imgui.Button('Reset to defaults')) then
+            -- Reset everything except the saved skill levels
+            local save = skilluptracker.Settings.skill_levels;
+            settings.reset();
+            skilluptracker.Settings.skill_levels = save;
+            settings.save();
+        end
+    end
+    imgui.End();
+end);
+
+--[[
+* event: command
+* desc : Event called when the addon is processing a command.
+--]]
+ashita.events.register('command', 'skilluptracker_HandleCommand', function (e)
+    -- Parse the command arguments
+    local args = e.command:args();
+    if (#args == 0 or not args[1]:any('/sut', '/skilluptracker')) then return; end
+
+    -- Block all related commands
+    e.blocked = true;
+
+    if (#args >= 1) then
+        skilluptracker.Visible[1] = not skilluptracker.Visible[1];
+        return;
+    end
+end);
