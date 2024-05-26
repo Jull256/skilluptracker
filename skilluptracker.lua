@@ -223,7 +223,8 @@ local function getSkillUpColor(amount)
     return skilluptracker.Settings.colors.skillups[math.min(amount, #skilluptracker.Settings.colors.skillups)]
 end
 
-local function sendDecimalSkillupMessage(skillname, skillAmount, total, capped, cap)
+local function sendDecimalSkillupMessage(skillname, skillAmount, total, cap)
+    local capped = total / 10 >= cap;
     local colors = skilluptracker.Settings.colors;
     AshitaCore:GetChatManager():AddChatMessage(skilluptracker.MsgMode, false,
         chat.color1(colors.msg, 'Your ')
@@ -237,13 +238,14 @@ local function sendDecimalSkillupMessage(skillname, skillAmount, total, capped, 
     );
 end
 
-local function sendFullSkillupMessage(skillname, skillLevel, capped, cap)
+local function sendFullSkillupMessage(skillname, skillLevel, cap)
+    local capped = skillLevel >= cap;
     local colors = skilluptracker.Settings.colors;
     AshitaCore:GetChatManager():AddChatMessage(skilluptracker.MsgMode, false,
         chat.color1(colors.msg, 'Your ')
         :append(chat.color1(colors.skillname, skillname))
         :append(chat.color1(colors.msg, ' skill reaches level '))
-        :append(chat.color1(capped and colors.cap or colors.uncap, ('%d'):fmt(skillLevel / 10)))
+        :append(chat.color1(capped and colors.cap or colors.uncap, ('%d'):fmt(skillLevel)))
         :append(chat.color1(capped and colors.cap or colors.uncap, (" / %d"):fmt(cap)))
     );
 end
@@ -275,7 +277,7 @@ ashita.events.register('packet_in', 'skilluptracker_PacketIn', function (e)
             settings.save();
 
             -- Send the skillup message to the log
-            sendDecimalSkillupMessage(sSkill['en']:lower(), skillAmount, savedLevel, pSkill:IsCapped(), skillCap);
+            sendDecimalSkillupMessage(sSkill['en']:lower(), skillAmount, savedLevel, skillCap);
 
             -- Prevent the client from sending another message
             e.blocked = true;
@@ -296,7 +298,8 @@ ashita.events.register('packet_in', 'skilluptracker_PacketIn', function (e)
             end
 
             -- Send the skillup message to the log
-            sendFullSkillupMessage(sSkill['en']:lower(), skillLevel * 10, pSkill:IsCapped(), skillCap);
+            -- pSkill:IsCapped() seems to return false for synthesis crafts under max rank
+            sendFullSkillupMessage(sSkill['en']:lower(), skillLevel, skillCap);
 
             -- Prevent the client from sending another message
             e.blocked = true;
@@ -357,11 +360,11 @@ ashita.events.register('d3d_present', 'skilluptracker_HandleRender', function ()
         imgui.PopItemWidth()
         imgui.Separator();
         if (imgui.Button('Color Test')) then
-            sendFullSkillupMessage('testing', 95, false, 10);
-            sendDecimalSkillupMessage('testing', 1, 95, false, 10);
-            sendDecimalSkillupMessage('testing', 2, 97, false, 10);
-            sendDecimalSkillupMessage('testing', 3, 100, true, 10);
-            sendFullSkillupMessage('testing', 100, true, 10);
+            sendFullSkillupMessage('testing', 9, 10);
+            sendDecimalSkillupMessage('testing', 1, 95, 10);
+            sendDecimalSkillupMessage('testing', 2, 97, 10);
+            sendDecimalSkillupMessage('testing', 3, 100, 10);
+            sendFullSkillupMessage('testing', 10, 10);
         end
         imgui.SameLine();
         if (imgui.Button('Reset to defaults')) then
